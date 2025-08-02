@@ -19,6 +19,8 @@ import concurrent.futures
 from queue import Queue
 import logging
 import functools
+import os
+import struct
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -215,14 +217,14 @@ class Chunk:
                 np.setTexture(self.tex_dict[k])
 
     def destroy(self):
-        if self.world_blocks is not None:
-            for pos in self.blocks:
-                x, y, z = pos
-                wx = self.chunk_x * CHUNK_SIZE + x
-                wy = self.chunk_y * CHUNK_SIZE + y
-                wz = self.chunk_z * CHUNK_SIZE + z
-                if (wx, wy, wz) in self.world_blocks:
-                    del self.world_blocks[(wx, wy, wz)]
+        # if self.world_blocks is not None:
+        #     for pos in self.blocks:
+        #         x, y, z = pos
+        #         wx = self.chunk_x * CHUNK_SIZE + x
+        #         wy = self.chunk_y * CHUNK_SIZE + y
+        #         wz = self.chunk_z * CHUNK_SIZE + z
+        #         if (wx, wy, wz) in self.world_blocks:
+        #             del self.world_blocks[(wx, wy, wz)]
         self.node.removeNode()
         self.blocks.clear()
 
@@ -423,23 +425,76 @@ class WorldManager:
         self.last_player_chunk = player_chunk
         return task.cont
 
+    # def finalize_chunks(self, task):
+    #     count = 0
+    #     while count < MAX_FINALIZE_PER_FRAME and not self.chunks_to_finalize.empty():
+    #         cx, cy, cz, block_data = self.chunks_to_finalize.get()
+    #         chunk = Chunk.from_block_data(self.app, 
+    #                                       cx, cy, cz, 
+    #                                       self.app.tex_dict, 
+    #                                       block_data, 
+    #                                       self.world_blocks)
+    #         # enqueue for incremental mesh-building
+    #         self.chunks[(cx, cy, cz)] = chunk
+    #         self.app.building_chunks.append(chunk)
+
+    #         # ─── patch in saved edits ───
+    #         for (wx, wy, wz), bt in list(self.world_blocks.items()):
+    #             # is this block inside the chunk we just created?
+    #             local_x = wx - cx * CHUNK_SIZE
+    #             local_y = wy - cy * CHUNK_SIZE
+    #             local_z = wz - cz * CHUNK_SIZE
+    #             if 0 <= local_x < CHUNK_SIZE and 0 <= local_y < CHUNK_SIZE and 0 <= local_z < CHUNK_SIZE:
+    #                 # overwrite the perlin‐noise block with the saved one
+    #                 chunk.blocks[(local_x, local_y, local_z)] = bt
+    #         # override with any saved edits in this chunk:
+    #         for (wx, wy, wz), bt in self.app.saved_blocks.items():
+    #             sx, sy, sz = wx - cx*CHUNK_SIZE, wy - cy*CHUNK_SIZE, wz - cz*CHUNK_SIZE
+    #             if 0 <= sx < CHUNK_SIZE and 0 <= sy < CHUNK_SIZE and 0 <= sz < CHUNK_SIZE:
+    #                 # patch both the global map and chunk.local blocks:
+    #                 self.world_blocks[(wx, wy, wz)] = bt
+    #                 chunk.blocks[(sx, sy, sz)] = bt
+    #         for (lx, ly, lz), btype in block_data.items():
+    #             wx = cx * CHUNK_SIZE + lx
+    #             wy = cy * CHUNK_SIZE + ly
+    #             wz = cz * CHUNK_SIZE + lz
+    #             self.world_blocks[(wx, wy, wz)] = btype
+    #         # enqueue for incremental mesh‐building instead of building immediately
+    #         self.chunks[(cx, cy, cz)] = chunk
+    #         self.app.building_chunks.append(chunk)
+    #         count += 1
+    #     return task.cont
+
     def finalize_chunks(self, task):
         count = 0
         while count < MAX_FINALIZE_PER_FRAME and not self.chunks_to_finalize.empty():
             cx, cy, cz, block_data = self.chunks_to_finalize.get()
-            chunk = Chunk.from_block_data(self.app, 
-                                          cx, cy, cz, 
-                                          self.app.tex_dict, 
-                                          block_data, 
-                                          self.world_blocks)
+
+            # 1) Seed the global world map with this chunk’s base data
             for (lx, ly, lz), btype in block_data.items():
-                wx = cx * CHUNK_SIZE + lx
-                wy = cy * CHUNK_SIZE + ly
-                wz = cz * CHUNK_SIZE + lz
+                wx, wy, wz = cx*CHUNK_SIZE + lx, cy*CHUNK_SIZE + ly, cz*CHUNK_SIZE + lz
                 self.world_blocks[(wx, wy, wz)] = btype
-            # enqueue for incremental mesh‐building instead of building immediately
+
+            # 2) Build the chunk from that base data
+            chunk = Chunk.from_block_data(
+                self.app, cx, cy, cz, self.app.tex_dict, block_data, self.world_blocks
+            )
             self.chunks[(cx, cy, cz)] = chunk
             self.app.building_chunks.append(chunk)
+
+            # 3) Re-apply *every* saved edit into both global + chunk:
+            for (wx, wy, wz), bt in self.app.saved_blocks.items():
+                sx, sy, sz = wx - cx*CHUNK_SIZE, wy - cy*CHUNK_SIZE, wz - cz*CHUNK_SIZE
+                if 0 <= sx < CHUNK_SIZE and 0 <= sy < CHUNK_SIZE and 0 <= sz < CHUNK_SIZE:
+                    if bt is None:
+                        # mined out — ensure both maps are empty
+                        self.world_blocks.pop((wx, wy, wz), None)
+                        chunk.blocks.pop((sx, sy, sz), None)
+                    else:
+                        # placed or replaced — write back in
+                        self.world_blocks[(wx, wy, wz)] = bt
+                        chunk.blocks[(sx, sy, sz)] = bt
+
             count += 1
         return task.cont
 
@@ -917,8 +972,13 @@ class BlockInteraction:
 
         wm.dirty_chunks.add(chunk_key)
 
+        # Then *record* that this coordinate is now empty (so it stays empty on reload)
+        self.app.saved_blocks[block_coord] = None
+
         # 4) Give the block to the player
         self.app.hotbar.add_block(block_type, 1)
+
+        log.info(f"Mined {block_type} at {block_coord}")
 
 
     def place_block(self):
@@ -947,8 +1007,13 @@ class BlockInteraction:
 
         wm.dirty_chunks.add(chunk_key)
 
+        # And record it permanently:
+        self.app.saved_blocks[place_pos] = block_type
+
         # 6) Consume the block from the player
         self.app.hotbar.remove_block(block_type, 1)
+
+        log.info(f"Placed {block_type} at {place_pos}")
 
 class CubeCraft(ShowBase):
     def __init__(self):
@@ -974,6 +1039,11 @@ class CubeCraft(ShowBase):
         self.paused = True
         self.spawn_done = False
 
+        # tell Panda to fire "window-closed" when the user clicks the X:
+        self.win.setCloseRequestEvent("window-closed")
+        # catch that event and save+exit:
+        self.accept("window-closed", self.exit_game)
+
         # track how many initial chunks have been meshed
         self.mesh_done = 0
 
@@ -984,6 +1054,9 @@ class CubeCraft(ShowBase):
         self.ui_manager.loading_frame.show()
         self.graphicsEngine.renderFrame()
         self.graphicsEngine.renderFrame()
+
+        # Before creating WorldManager, load any saved world:
+        self.saved_blocks = self.load_world("world.dat")
 
         self.world_manager     = WorldManager(self)
         self.block_interaction = BlockInteraction(self)
@@ -1064,6 +1137,28 @@ class CubeCraft(ShowBase):
             # and not self.world_manager.dirty_chunks):
             log.info(">>> World load complete — unpausing now")
 
+            for pos, bt in self.saved_blocks.items():
+                # override global map
+                self.world_manager.world_blocks[pos] = bt
+                # find chunk & local coords
+                (cx, cy, cz), (lx, ly, lz) = self.block_interaction.get_chunk_and_local(pos)
+                chunk_key = (cx, cy, cz)
+                # Ensure chunk exists — if not, create a shell now
+                if chunk_key not in self.world_manager.chunks:
+                    new_chunk = Chunk(self, cx, cy, cz, self.tex_dict, self.world_manager.world_blocks)
+                    self.world_manager.chunks[chunk_key] = new_chunk
+                    self.building_chunks.append(new_chunk)
+                # Now patch the block in
+                chunk = self.world_manager.chunks[chunk_key]
+                chunk.blocks[(lx, ly, lz)] = bt
+                self.world_manager.dirty_chunks.add(chunk_key)
+                # chunk = self.world_manager.chunks.get((cx, cy, cz))
+                # if chunk:
+                #     # override the chunk’s local storage
+                #     chunk.blocks[(lx, ly, lz)] = bt
+                #     # flag for rebuild
+                #     self.world_manager.dirty_chunks.add((cx, cy, cz))
+
             # 1) hide the loading screen and flush it
             self.ui_manager.loading_frame.hide()
             self.ui_manager.crosshair.show()
@@ -1107,6 +1202,11 @@ class CubeCraft(ShowBase):
         self.ui_manager.toggle_debug()
 
     def exit_game(self):
+        print("Saving and quitting...")
+        # dump the world to disk
+        self.save_world("world.dat")
+
+        # then shut down threads and exit
         self.world_manager.chunk_load_executor.shutdown(wait=False)
         self.userExit()
 
@@ -1159,6 +1259,37 @@ class CubeCraft(ShowBase):
         self.setBackgroundColor(*curr_sky)
 
         return task.cont
+    
+    def save_world(self, filename="world.dat"):
+        """Serialize self.saved_blocks to a compact binary file, including mined blocks."""
+        wb = self.saved_blocks
+        print(f"Saving {len(wb)} saved edits...")
+        with open(filename, "wb") as f:
+            f.write(struct.pack("<I", len(wb)))  # number of entries
+            for (x, y, z), bt in wb.items():
+                # Encode `None` (mined blocks) as 255
+                encoded_bt = 255 if bt is None else bt
+                f.write(struct.pack("<iiiB", x, y, z, encoded_bt))
+        print("World saved to", filename)
+
+    def load_world(self, filename="world.dat"):
+        """Return a dict of block edits, with None for mined blocks."""
+        if not os.path.isfile(filename):
+            return {}
+        with open(filename, "rb") as f:
+            data = f.read(4)
+            if len(data) < 4:
+                return {}
+            (count,) = struct.unpack("<I", data)
+            blocks = {}
+            record_size = struct.calcsize("<iiiB")
+            for _ in range(count):
+                chunk = f.read(record_size)
+                if len(chunk) < record_size:
+                    break
+                x, y, z, bt = struct.unpack("<iiiB", chunk)
+                blocks[(x, y, z)] = None if bt == 255 else bt
+            return blocks
 
 if __name__ == "__main__":
     app = CubeCraft()
