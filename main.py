@@ -1003,18 +1003,26 @@ class CubeCraft(ShowBase):
 
         self.taskMgr.add(self.update_chunk_building, "updateChunkBuilding")
 
-        light = DirectionalLight('light')
-        light_np = self.render.attachNewNode(light)
-        light_np.setHpr(0, -60, 0)
-        self.render.setLight(light_np)
-        self.render.setTwoSided(False)
-        ambient = AmbientLight("ambient")
-        ambient.setColor((0.4, 0.4, 0.4, 1))
-        ambient_np = self.render.attachNewNode(ambient)
-        self.render.setLight(ambient_np)
+        # Directional (sun) light
+        self.directional_light = DirectionalLight('sun')
+        self.directional_np    = self.render.attachNewNode(self.directional_light)
+        self.directional_np.setHpr(0, -60, 0)    # starting angle
+        self.render.setLight(self.directional_np)
+        # self.render.setTwoSided(False)
+
+        # Ambient light
+        self.ambient_light = AmbientLight('ambient')
+        self.ambient_np    = self.render.attachNewNode(self.ambient_light)
+        self.ambient_light.setColor((0.4, 0.4, 0.4, 1))
+        self.render.setLight(self.ambient_np)
+
+        # ─── Day/Night Cycle Parameters ───
+        self.day_length = 60.0      # seconds for a full day→night→day
+        self.time_of_day = 0.0      # current time (0 … day_length)
 
         self.building_chunks = []
         self.taskMgr.add(self.block_interaction.update_ghost, "ghostBlockTask")
+        self.taskMgr.add(self.update_daynight, "dayNightTask")
 
     def update_chunk_building(self, task):
         # Even while paused, build one plane of the next chunk each frame
@@ -1112,6 +1120,45 @@ class CubeCraft(ShowBase):
         self.camera.setPos(x, y, spawn_z)
         self.player_controller.player_vel = Vec3(0, 0, 0)
         self.player_controller.is_on_ground = True
+
+    def update_daynight(self, task):
+        # Delta time
+        dt = self.globalClock.getDt()
+        # Advance and wrap
+        self.time_of_day = (self.time_of_day + dt) % self.day_length
+        # Compute a phase [0,2π)
+        phase = (self.time_of_day / self.day_length) * 2 * math.pi
+
+        # Example: sun height oscillates from -1 (midnight) to +1 (noon)
+        sun_elevation = math.sin(phase)
+        # Map to HPR pitch angle: -90° at midnight, +90° at noon
+        pitch = sun_elevation * 90  
+
+        # Rotate DirectionalLight node
+        self.directional_np.setHpr(0, -pitch, 0)
+
+        # Color interp: night = dark blue, day = warm white
+        day_color = LColor(1.0, 0.95, 0.8, 1)    # soft daylight
+        night_color = LColor(0.1, 0.1, 0.3, 1)   # deep night
+        t = (sun_elevation + 1) / 2             # 0 at midnight, 1 at noon
+
+        # Linear interpolate colors
+        curr_color = day_color * t + night_color * (1 - t)
+        self.directional_light.setColor(curr_color)
+
+        # Ambient light: dimmer at night
+        amb_day = LColor(0.4, 0.4, 0.5, 1)
+        amb_night = LColor(0.05, 0.05, 0.1, 1)
+        curr_amb = amb_day * t + amb_night * (1 - t)
+        self.ambient_light.setColor(curr_amb)
+
+        # Optional: background sky color
+        sky_day = (0.5, 0.7, 1.0, 1)
+        sky_night = (0.0, 0.0, 0.05, 1)
+        curr_sky = tuple(sky_day[i] * t + sky_night[i] * (1 - t) for i in range(4))
+        self.setBackgroundColor(*curr_sky)
+
+        return task.cont
 
 if __name__ == "__main__":
     app = CubeCraft()
