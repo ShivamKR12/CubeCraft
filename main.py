@@ -26,10 +26,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-scale = 10.0  
-octaves = 2  
-persistence = 0.5  
-lacunarity = 2.0  
+SCALE = 10.0  
+OCTAVES = 2  
+PERSISTENCE = 0.5  
+LUCANARITY = 2.0  
 
 CHUNK_SIZE = 8
 RENDER_DISTANCE = 4
@@ -62,7 +62,7 @@ FACES = [
 ]
 FACE_UVS = [[(0, 0), (1, 0), (1, 1), (0, 1)] for _ in range(6)]
 
-NEIGHBOR_OFFSETS = [(-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)]
+# NEIGHBOR_OFFSETS = [(-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)]
 
 def world_to_chunk_block(pos):
     cx = int(math.floor(pos[0] / CHUNK_SIZE))
@@ -113,7 +113,7 @@ class Chunk:
             wx = self.chunk_x * CHUNK_SIZE + x
             for y in range(CHUNK_SIZE):
                 wy = self.chunk_y * CHUNK_SIZE + y
-                height = get_terrain_height(wx, wy, scale, octaves, persistence, lacunarity)
+                height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
                 block_type = None
                 if wz > height:
                     continue
@@ -142,7 +142,7 @@ class Chunk:
                 wy = chunk_y * CHUNK_SIZE + y
                 for z in reversed(range(CHUNK_SIZE)):
                     wz = chunk_z * CHUNK_SIZE + z
-                    height = get_terrain_height(wx, wy, scale, octaves, persistence, lacunarity)
+                    height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
                     block_type = None
                     if wz > height:
                         continue
@@ -403,7 +403,7 @@ class WorldManager:
                     cy = player_cy + dy
                     cz = player_cz + dz
                     if cz < min_cz or cz > max_cz:
-                        continue  # ✋ Don't generate below allowed range
+                        continue  # Don't generate below allowed range
                     key = (cx, cy, cz)
                     chunks_to_keep.add(key)
                     if key not in self.chunks:
@@ -449,7 +449,7 @@ class WorldManager:
         # rebuild at most N dirty chunks per frame (to cap cost)
         count = 0
         # debug: show what's pending
-        log.debug("Dirty before rebuild: %s", self.dirty_chunks)
+        # log.debug("Dirty before rebuild: %s", self.dirty_chunks)
         while count < MAX_DIRTY_PER_FRAME and self.dirty_chunks:
             key = self.dirty_chunks.pop()
             log.debug("[dirty] → re-meshing chunk %s", key)
@@ -457,7 +457,7 @@ class WorldManager:
             if chunk is not None:
                 chunk.build_mesh(force_cull=True)
             count += 1
-        log.debug("Dirty before rebuild: %s", self.dirty_chunks)
+        # log.debug("Dirty after rebuild: %s", self.dirty_chunks)
         return task.cont
     
     def _on_chunk_loaded(self, cx, cy, cz, future):
@@ -1024,7 +1024,6 @@ class CubeCraft(ShowBase):
             if not still_more:
                 # initial mesh (no culling) now that all planes exist
                 log.debug("Chunk %d,%d,%d built (unculled mesh).", chunk.chunk_x, chunk.chunk_y, chunk.chunk_z)
-                log.debug("[initial] → unculled build chunk %s", (chunk.chunk_x, chunk.chunk_y, chunk.chunk_z))
                 chunk.build_mesh(force_cull=False)
 
                 # now count this mesh as “done”
@@ -1035,11 +1034,11 @@ class CubeCraft(ShowBase):
                 self.ui_manager.update_loading(done, total)
 
                 # mark neighbors for cull-pass
-                for dx, dy, dz in NEIGHBOR_OFFSETS:
-                    neighbor_key = (chunk.chunk_x + dx,
-                                    chunk.chunk_y + dy,
-                                    chunk.chunk_z + dz)
-                    self.world_manager.dirty_chunks.add(neighbor_key)
+                # for dx, dy, dz in NEIGHBOR_OFFSETS:
+                #     neighbor_key = (chunk.chunk_x + dx,
+                #                     chunk.chunk_y + dy,
+                #                     chunk.chunk_z + dz)
+                #     self.world_manager.dirty_chunks.add(neighbor_key)
 
                 # now let process_dirty handle the force_cull pass over subsequent frames
                 self.world_manager.dirty_chunks.add((chunk.chunk_x,
@@ -1051,10 +1050,6 @@ class CubeCraft(ShowBase):
         # Only spawn once *every* mesh and cull‐remesh is fully finished:
         done  = self.world_manager.initial_done  + self.mesh_done
         total = self.world_manager.initial_total * 2
-        # if (not self.spawn_done
-        #     and done >= total
-        #     and not self.building_chunks
-        #     and not self.world_manager.dirty_chunks):
         if (not self.spawn_done
             and done >= total
             and not self.building_chunks):
@@ -1087,7 +1082,6 @@ class CubeCraft(ShowBase):
             # bind escape & F3
             self.accept("escape", self.handle_escape_key)
             self.accept("f3",     self.toggle_f3_features)
-            # ──────────────────────────────────────
 
         return task.cont
 
@@ -1113,14 +1107,12 @@ class CubeCraft(ShowBase):
 
     def spawn_at_origin(self):
         x, y = 0, 0
-        h = get_terrain_height(x, y, scale, octaves, persistence, lacunarity)
+        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
         spawn_z = h + PLAYER_HEIGHT + 10
         self.camera.setPos(x, y, spawn_z)
         self.player_controller.player_vel = Vec3(0, 0, 0)
         self.player_controller.is_on_ground = True
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, 
-                        format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
     app = CubeCraft()
     app.run()

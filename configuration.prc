@@ -1,6 +1,6 @@
-# Config.prc
-win-size 1280 720
+# configuration.prc
+win-size 1080 720
 window-title CubeCraft
 fullscreen false
 cursor-hidden true
-show-frame-rate-meter false
+show-frame-rate-meter true
