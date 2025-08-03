@@ -10,7 +10,8 @@ from panda3d.core import (
     DirectionalLight, AmbientLight, WindowProperties,
     GeomVertexFormat, GeomVertexData, Geom, GeomNode,
     GeomTriangles, GeomVertexWriter, TransparencyAttrib,
-    NodePath, Vec3, Point3, TextNode, Texture, CardMaker, LColor
+    NodePath, Vec3, Point3, TextNode, Texture, CardMaker,
+    LColor, TextureStage
 )
 
 from noise import pnoise2
@@ -21,6 +22,7 @@ import logging
 import functools
 import os
 import struct
+import random
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -39,9 +41,18 @@ WORLD_HEIGHT = 8  # Maximum world height (for chunking)
 MAX_FINALIZE_PER_FRAME = 1
 MAX_DIRTY_PER_FRAME = 6
 BLOCK_TYPES = {
-    1: {'name': 'dirt', 'texture': 'assets/dirt.jpg'},
+    1: {'name': 'dirt',  'texture': 'assets/dirt.jpg'},
     2: {'name': 'grass', 'texture': 'assets/grass.jpg'},
     3: {'name': 'stone', 'texture': 'assets/stone.png'},
+    4: {'name': 'sand',  'texture': 'assets/sand.png'},
+    5: {'name': 'snow',  'texture': 'assets/snow.png'},
+    6: {'name': 'cactus',  'texture': 'assets/cactus.png'},
+    7: {'name': 'glass',  'texture': 'assets/glass.png'},
+    8: {'name': 'oak_plank', 'texture': 'assets/oak_plank.png'},
+    9: {'name': 'oak',    'texture': 'assets/oak.png'},
+    10: {'name': 'leave', 'texture': 'assets/leave.png'},
+    11: {'name': 'stone_brick', 'texture': 'assets/stone_brick.png'},
+    12: {'name': 'grass2', 'texture': 'assets/grass2.png'},
 }
 
 PLAYER_HEIGHT = 1.75
@@ -53,6 +64,17 @@ HOTBAR_SLOT_COUNT = 9
 HOTBAR_SLOT_SIZE = 0.12
 HOTBAR_SLOT_PADDING = 0.015
 HOTBAR_Y_POS = -0.88
+
+# Biome IDs
+BIOME_DESERT = 0
+BIOME_FOREST = 1
+BIOME_SNOW   = 2
+
+# Noise parameters for biome map
+BIOME_SCALE      = 200.0
+BIOME_OCTAVES    = 2
+BIOME_PERSISTENCE = 0.5
+BIOME_LACUNARITY = 2.0
 
 FACES = [
     ((0, 1, 0),  "north",  [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)]),   # +Y
@@ -87,6 +109,22 @@ def get_terrain_height(x, y,
                   lacunarity=lacunarity)
     return int(raw * half + half)
 
+def get_biome(x, y):
+    """Return one of BIOME_DESERT, BIOME_FOREST, BIOME_SNOW."""
+    # produces -1…+1
+    raw = pnoise2(x/BIOME_SCALE, y/BIOME_SCALE,
+                  octaves=BIOME_OCTAVES,
+                  persistence=BIOME_PERSISTENCE,
+                  lacunarity=BIOME_LACUNARITY)
+    # remap to 0…1
+    t = (raw + 1) / 2
+    if t < 0.33:
+        return BIOME_DESERT
+    elif t > 0.66:
+        return BIOME_FOREST
+    else:
+        return BIOME_SNOW
+
 class Chunk:
     def __init__(self, base, chunk_x, chunk_y, chunk_z, tex_dict, world_blocks):
         self.chunk_x = chunk_x
@@ -117,14 +155,34 @@ class Chunk:
                 wy = self.chunk_y * CHUNK_SIZE + y
                 height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
                 block_type = None
+                # if wz > height:
+                #     continue
+                # elif wz == height:
+                #     block_type = 2
+                # elif wz < 2:
+                #     block_type = 3
+                # else:
+                #     block_type = 1
+                biome = get_biome(wx, wy)
                 if wz > height:
                     continue
                 elif wz == height:
-                    block_type = 2
+                    log.debug("get_biome @ (%d,%d) → %d", wx, wy, biome)
+                    # surface block varies by biome
+                    if biome == BIOME_DESERT:
+                        block_type = 4   # assign ID 4 → sand (you’ll add to BLOCK_TYPES)
+                    elif biome == BIOME_SNOW:
+                        block_type = 5   # snow block (ID 5)
+                    else:
+                        block_type = 2   # grass
                 elif wz < 2:
-                    block_type = 3
+                    block_type = 3       # stone below
                 else:
-                    block_type = 1
+                    # sub‐surface
+                    if biome == BIOME_DESERT:
+                        block_type = 4     # deeper sand
+                    else:
+                        block_type = 1     # dirt
 
                 self.blocks[(x, y, z)] = block_type
                 if self.world_blocks is not None:
@@ -146,14 +204,34 @@ class Chunk:
                     wz = chunk_z * CHUNK_SIZE + z
                     height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
                     block_type = None
+                    # if wz > height:
+                    #     continue
+                    # elif wz == height:
+                    #     block_type = 2
+                    # elif wz < 2:
+                    #     block_type = 3
+                    # else:
+                    #     block_type = 1
+                    biome = get_biome(wx, wy)
                     if wz > height:
                         continue
                     elif wz == height:
-                        block_type = 2
+                        log.debug("get_biome @ (%d,%d) → %d", wx, wy, biome)
+                        # surface block varies by biome
+                        if biome == BIOME_DESERT:
+                            block_type = 4   # assign ID 4 → sand (you’ll add to BLOCK_TYPES)
+                        elif biome == BIOME_SNOW:
+                            block_type = 5   # snow block (ID 5)
+                        else:
+                            block_type = 2   # grass
                     elif wz < 2:
-                        block_type = 3
+                        block_type = 3       # stone below
                     else:
-                        block_type = 1
+                        # sub‐surface
+                        if biome == BIOME_DESERT:
+                            block_type = 4     # deeper sand
+                        else:
+                            block_type = 1     # dirt
 
                     blocks[(x, y, z)] = block_type
         return blocks
@@ -179,6 +257,9 @@ class Chunk:
             idxs[k] = 0
 
         for pos, block_type in self.blocks.items():
+            # skip “mined out” marker entries
+            if block_type is None:
+                continue
             x, y, z = pos
             wx = self.chunk_x * CHUNK_SIZE + x
             wy = self.chunk_y * CHUNK_SIZE + y
@@ -1015,6 +1096,36 @@ class BlockInteraction:
 
         log.info(f"Placed {block_type} at {place_pos}")
 
+class Clouds:
+    def __init__(self, app, height=100):
+        self.app    = app
+        self.height = height
+        # 1) Create a TextureStage for your clouds
+        self.clouds_texStage = TextureStage("clouds")
+        # 2) (Optional) configure wrap mode so UVs tile
+        app.clouds_tex.setWrapU(app.clouds_tex.WM_repeat)
+        app.clouds_tex.setWrapV(app.clouds_tex.WM_repeat)
+        # 3) Make a huge horizontal plane
+        cm = CardMaker("clouds")
+        cm.setFrame(-2048, 2048, -2048, 2048)
+        self.node = app.render.attachNewNode(cm.generate())
+        self.node.setP(-90)            # lie flat
+        self.node.setZ(self.height)    # high in the sky
+        self.node.setTransparency(True)
+        # 4) Apply your clouds texture via the stage
+        self.node.setTexture(self.clouds_texStage, app.clouds_tex)
+        # 5) Tile it
+        self.node.setTexScale(self.clouds_texStage, 8, 8)
+
+    def update(self, dt):
+        # re-center on camera XY so it “follows” you
+        cam = self.app.camera.getPos()
+        self.node.setX(cam.x)
+        self.node.setY(cam.y)
+        # optional: animate texture scroll
+        u_offset = (self.app.globalClock.getFrameTime() * 0.005) % 1.0
+        self.node.setTexOffset(self.clouds_texStage, u_offset, 0)
+
 class CubeCraft(ShowBase):
     def __init__(self):
         super().__init__()
@@ -1024,6 +1135,10 @@ class CubeCraft(ShowBase):
             tex.setMagfilter(Texture.FTNearest)
             tex.setMinfilter(Texture.FTNearest)
             self.tex_dict[k] = tex
+        
+        self.clouds_tex = self.loader.loadTexture("assets/clouds.png")
+        self.clouds_tex.setWrapU(self.clouds_tex.WM_repeat)
+        self.clouds_tex.setWrapV(self.clouds_tex.WM_repeat)
 
         # ─────── NEW ───────
         # Master inventory counts (block_type → count)
@@ -1096,6 +1211,14 @@ class CubeCraft(ShowBase):
         self.building_chunks = []
         self.taskMgr.add(self.block_interaction.update_ghost, "ghostBlockTask")
         self.taskMgr.add(self.update_daynight, "dayNightTask")
+        self.clouds = Clouds(self, height=WORLD_HEIGHT*CHUNK_SIZE + 20)
+        # add an update task
+        self.taskMgr.add(self.update_clouds, "cloudsTask")
+    
+    def update_clouds(self, task):
+        dt = self.globalClock.getDt()
+        self.clouds.update(dt)
+        return task.cont
 
     def update_chunk_building(self, task):
         # Even while paused, build one plane of the next chunk each frame
