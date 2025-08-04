@@ -352,7 +352,7 @@ class PlayerController:
         x, y, _ = self.app.camera.getPos()
         h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
         print("play_footstep: player pos:", x, y, h)
-        block_pos = (math.floor(x), math.floor(y), math.floor(h) - 1)
+        block_pos = (math.floor(x), math.floor(y), math.floor(h))
         print("play_footstep: block_pos:", block_pos)
         block_type = self.app.world_manager.world_blocks.get(block_pos)
         print("play_footstep: block_type:", block_type)
@@ -1166,21 +1166,17 @@ class Clouds:
     def __init__(self, app, height=100):
         self.app    = app
         self.height = height
-        # 1) Create a TextureStage for your clouds
         self.clouds_texStage = TextureStage("clouds")
-        # 2) (Optional) configure wrap mode so UVs tile
-        app.clouds_tex.setWrapU(app.clouds_tex.WM_repeat)
-        app.clouds_tex.setWrapV(app.clouds_tex.WM_repeat)
-        # 3) Make a huge horizontal plane
         cm = CardMaker("clouds")
         cm.setFrame(-2048, 2048, -2048, 2048)
         self.node = app.render.attachNewNode(cm.generate())
         self.node.setP(-90)            # lie flat
         self.node.setZ(self.height)    # high in the sky
-        self.node.setTransparency(True)
-        # 4) Apply your clouds texture via the stage
+        self.node.setTwoSided(True)
+        self.node.setTransparency(TransparencyAttrib.MAlpha)
+        self.node.setDepthWrite(False)
+        self.node.setBin("transparent", 10)
         self.node.setTexture(self.clouds_texStage, app.clouds_tex)
-        # 5) Tile it
         self.node.setTexScale(self.clouds_texStage, 8, 8)
 
     def update(self, dt):
@@ -1203,8 +1199,9 @@ class CubeCraft(ShowBase):
             self.tex_dict[k] = tex
         
         self.clouds_tex = self.loader.loadTexture("assets/clouds.png")
-        self.clouds_tex.setWrapU(self.clouds_tex.WM_repeat)
-        self.clouds_tex.setWrapV(self.clouds_tex.WM_repeat)
+        self.clouds_tex.setMagfilter(Texture.FTNearest)
+        self.clouds_tex.setMinfilter(Texture.FTNearest)
+        self.clouds_tex.clearRamMipmapImage(0)
 
         # ─────── NEW ───────
         # Master inventory counts (block_type → count)
