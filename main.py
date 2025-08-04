@@ -11,7 +11,7 @@ from panda3d.core import (
     GeomVertexFormat, GeomVertexData, Geom, GeomNode,
     GeomTriangles, GeomVertexWriter, TransparencyAttrib,
     NodePath, Vec3, Point3, TextNode, Texture, CardMaker,
-    LColor, TextureStage
+    LColor, TextureStage, ClockObject, AudioSound
 )
 
 from noise import pnoise2
@@ -321,13 +321,52 @@ class PlayerController:
         self.center_y = self.app.win.getYSize() // 2
         self.heading = 0
         self.pitch = 0
-        from panda3d.core import ClockObject
         self.app.globalClock = ClockObject.getGlobalClock()
         self.globalClock = self.app.globalClock
         self.player_vel = Vec3(0, 0, 0)
         self.is_on_ground = False
         self.app.accept("space", self.try_jump)
         self.app.taskMgr.add(self.update_camera, "cameraTask")
+
+        # background music
+        # self.music = self.app.loader.loadMusic("assets/song_Forest.mp3")
+        # self.music.setLoop(True)
+        # self.music.setVolume(0.8)  # adjust volume to taste
+        # self.music.play()
+
+        # Load footstep sounds (IDs must match BLOCK_TYPES)
+        self.footstep_sounds = {
+            1: self.app.loader.loadSfx("assets/step.ogg"),       # dirt
+            2: self.app.loader.loadSfx("assets/step.ogg"),       # grass (uses same as dirt)
+            4: self.app.loader.loadSfx("assets/sandStep.ogg"),   # sand
+            5: self.app.loader.loadSfx("assets/snowStep.mp3"),   # snow
+        }
+
+        # Footstep timing
+        self.step_timer = 0.0
+        self.step_interval = 0.1  # seconds between step
+    
+    def play_footstep(self):
+        print("▶play_footstep called") 
+        # find the block directly under the player
+        x, y, _ = self.app.camera.getPos()
+        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
+        print("play_footstep: player pos:", x, y, h)
+        block_pos = (math.floor(x), math.floor(y), math.floor(h) - 1)
+        print("play_footstep: block_pos:", block_pos)
+        block_type = self.app.world_manager.world_blocks.get(block_pos)
+        print("play_footstep: block_type:", block_type)
+        sfx = self.footstep_sounds.get(block_type)
+        print("play_footstep: sfx:", sfx)
+        if not sfx:
+            return
+        
+        # only start it if it’s not already playing
+        if sfx.status() != AudioSound.PLAYING:
+            print("sfx.status() != AudioSound.PLAYING:", sfx.status() != AudioSound.PLAYING)
+            print("play_footstep: playing sound")
+            sfx.setVolume(0.8)
+            sfx.play()
 
     def set_key(self, key, value):
         self.key_map[key] = value
@@ -397,8 +436,34 @@ class PlayerController:
                 pos.z = math.floor(pos.z + 0.01)
             elif self.player_vel.z > 0:
                 self.player_vel.z = 0
+        
+        if abs(pos.z - round(pos.z)) < 0.05:
+            self.is_on_ground = True
+        
+        moved = move.length() > 0 and not blocked_xy
+        on_ground = self.is_on_ground
+
+        # if moved:
+        #     # play snow step every frame you move
+        #     snd = self.footstep_sounds.get(5)   # 5 = snow
+        #     if snd:
+        #         snd.setVolume(10)             # pick a volume 0.0–1.0
+        #         snd.play()
 
         cam.setPos(pos)
+
+        # FOOTSTEP TIMER
+        if moved and on_ground:
+            print(f"→ footstep tick (pos={pos}, ground={on_ground}, moved={moved})")
+            self.step_timer += dt
+            print("step_timer:",self.step_timer)
+            if self.step_timer >= self.step_interval:
+                print("self.step_timer >= self.step_interval:",self.step_timer >= self.step_interval)
+                self.step_timer = 0.0
+                self.play_footstep()
+        else:
+            # reset when not moving or in air
+            self.step_timer = 0.0
 
         if pos.z < -10:
             self.app.spawn_at_origin()
@@ -415,6 +480,7 @@ class PlayerController:
                 self.pitch = max(-89, min(89, self.pitch))
                 self.app.camera.setHpr(self.heading, self.pitch, 0)
                 self.app.win.movePointer(0, self.center_x, self.center_y)
+        
         return task.cont
 
 class WorldManager:
