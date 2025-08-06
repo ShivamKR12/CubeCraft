@@ -1250,6 +1250,41 @@ class CubeCraft(ShowBase):
         self.day_length = 60.0      # seconds for a full day→night→day
         self.time_of_day = 0.0      # current time (0 … day_length)
 
+        # SUN
+        self.sun_tex  = self.loader.loadTexture("assets/sun.jpg")
+        # disable mipmaps so Panda won’t pick a lower-res version:
+        self.sun_tex.clearRamMipmapImage(0)
+        # force nearest filtering (no smoothing):
+        self.sun_tex.setMinfilter(Texture.FTNearest)
+        self.sun_tex.setMagfilter(Texture.FTNearest)
+
+        # MOON
+        self.moon_tex = self.loader.loadTexture("assets/moon.jpg")
+        self.moon_tex.clearRamMipmapImage(0)
+        self.moon_tex.setMinfilter(Texture.FTNearest)
+        self.moon_tex.setMagfilter(Texture.FTNearest)
+
+        # ——— SUN ———
+        self.sun_np = self.loader.loadModel("models/misc/sphere")
+        self.sun_np.reparentTo(self.render)
+        self.sun_np.setTexture(self.sun_tex)
+        self.sun_np.setTransparency(TransparencyAttrib.MAlpha)
+        self.sun_np.setScale(50)    # radius of sphere; tweak to taste
+        # turn *off* scene lighting so it always appears fully lit:
+        self.sun_np.setLightOff()
+        # boost its apparent brightness (a subtle yellowish glow):
+        self.sun_np.setColorScale(1.2, 1.2, 1.0, 1)
+
+        # ——— MOON ———
+        self.moon_np = self.loader.loadModel("models/misc/sphere")
+        self.moon_np.reparentTo(self.render)
+        self.moon_np.setTexture(self.moon_tex)
+        self.moon_np.setTransparency(TransparencyAttrib.MAlpha)
+        self.moon_np.setScale(40)   # maybe a bit smaller
+        self.moon_np.setLightOff()
+        # give the moon a soft bluish tint so it still pops at night:
+        self.moon_np.setColorScale(0.8, 0.8, 1.0, 1)
+
         self.building_chunks = []
         self.taskMgr.add(self.block_interaction.update_ghost, "ghostBlockTask")
         self.taskMgr.add(self.update_daynight, "dayNightTask")
@@ -1403,6 +1438,27 @@ class CubeCraft(ShowBase):
 
         # Rotate DirectionalLight node
         self.directional_np.setHpr(0, -pitch, 0)
+
+        # reposition sun/​moon on a circle overhead
+        R = 1000  # radius of your sky sphere
+        # Let's put them on the X–Z plane:  
+        sun_x = R * math.cos(phase)
+        sun_z = R * sun_elevation
+        self.sun_np.setPos(sun_x, 0, sun_z)
+
+        moon_phase = phase + math.pi  # opposite side
+        moon_elev = math.sin(moon_phase)
+        moon_x = R * math.cos(moon_phase)
+        moon_z = R * moon_elev
+        self.moon_np.setPos(moon_x, 0, moon_z)
+
+        # show/hide depending on whether they're above the horizon
+        if sun_elevation > 0:
+            self.sun_np.show()
+            self.moon_np.hide()
+        else:
+            self.sun_np.hide()
+            self.moon_np.show()
 
         # Color interp: night = dark blue, day = warm white
         day_color = LColor(1.0, 0.95, 0.8, 1)    # soft daylight
