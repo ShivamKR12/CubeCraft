@@ -22,7 +22,6 @@ import logging
 import functools
 import os
 import struct
-import random
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -30,14 +29,14 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-SCALE = 10.0  
-OCTAVES = 2  
-PERSISTENCE = 0.5  
-LUCANARITY = 2.0  
+SCALE       = 120.0   # Big, continent-scale features
+OCTAVES     = 5       # Enough detail for peaks, not too noisy
+PERSISTENCE = 0.45    # Middle ground—peaks still pronounced
+LACUNARITY  = 2.0     # Standard “doubling” frequency 
 
 CHUNK_SIZE = 8
 RENDER_DISTANCE = 4
-WORLD_HEIGHT = 8  # Maximum world height (for chunking)
+WORLD_HEIGHT = 32  # Maximum world height (for chunking)
 MAX_FINALIZE_PER_FRAME = 1
 MAX_DIRTY_PER_FRAME = 6
 BLOCK_TYPES = {
@@ -65,17 +64,6 @@ HOTBAR_SLOT_SIZE = 0.12
 HOTBAR_SLOT_PADDING = 0.015
 HOTBAR_Y_POS = -0.88
 
-# Biome IDs
-BIOME_DESERT = 0
-BIOME_FOREST = 1
-BIOME_SNOW   = 2
-
-# Noise parameters for biome map
-BIOME_SCALE      = 200.0
-BIOME_OCTAVES    = 2
-BIOME_PERSISTENCE = 0.5
-BIOME_LACUNARITY = 2.0
-
 FACES = [
     ((0, 1, 0),  "north",  [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)]),   # +Y
     ((0, -1, 0), "south",  [(1, 0, 0), (1, 0, 1), (0, 0, 1), (0, 0, 0)]),   # -Y
@@ -85,8 +73,6 @@ FACES = [
     ((0, 0, -1), "bottom", [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]),   # -Z
 ]
 FACE_UVS = [[(0, 0), (1, 0), (1, 1), (0, 1)] for _ in range(6)]
-
-# NEIGHBOR_OFFSETS = [(-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)]
 
 def world_to_chunk_block(pos):
     cx = int(math.floor(pos[0] / CHUNK_SIZE))
@@ -102,28 +88,15 @@ def get_terrain_height(x, y,
                        octaves,
                        persistence,
                        lacunarity):
-    half = WORLD_HEIGHT // 2
     raw = pnoise2(x/scale, y/scale,
                   octaves=octaves,
                   persistence=persistence,
                   lacunarity=lacunarity)
-    return int(raw * half + half)
-
-def get_biome(x, y):
-    """Return one of BIOME_DESERT, BIOME_FOREST, BIOME_SNOW."""
-    # produces -1…+1
-    raw = pnoise2(x/BIOME_SCALE, y/BIOME_SCALE,
-                  octaves=BIOME_OCTAVES,
-                  persistence=BIOME_PERSISTENCE,
-                  lacunarity=BIOME_LACUNARITY)
-    # remap to 0…1
-    t = (raw + 1) / 2
-    if t < 0.33:
-        return BIOME_DESERT
-    elif t > 0.66:
-        return BIOME_FOREST
-    else:
-        return BIOME_SNOW
+    normalized = (raw + 1) * 0.5
+    # make valleys broader and peaks sharper
+    # normalized = ((raw + 1) * 0.5) ** 1.3
+    max_h = WORLD_HEIGHT - 1
+    return int(normalized * max_h)
 
 class Chunk:
     def __init__(self, base, chunk_x, chunk_y, chunk_z, tex_dict, world_blocks):
@@ -153,37 +126,28 @@ class Chunk:
             wx = self.chunk_x * CHUNK_SIZE + x
             for y in range(CHUNK_SIZE):
                 wy = self.chunk_y * CHUNK_SIZE + y
-                height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
+                height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
                 block_type = None
-                # if wz > height:
-                #     continue
-                # elif wz == height:
-                #     block_type = 2
-                # elif wz < 2:
-                #     block_type = 3
-                # else:
-                #     block_type = 1
-                biome = get_biome(wx, wy)
                 if wz > height:
                     continue
                 elif wz == height:
-                    log.debug("get_biome @ (%d,%d) → %d", wx, wy, biome)
-                    # surface block varies by biome
-                    if biome == BIOME_DESERT:
-                        block_type = 4   # assign ID 4 → sand (you’ll add to BLOCK_TYPES)
-                    elif biome == BIOME_SNOW:
-                        block_type = 5   # snow block (ID 5)
+                    if height >= 20:
+                        block_type = 5  # snow
+                    elif height >= 15:
+                        block_type = 3  # stone
+                    elif height >= 6:
+                        block_type = 2  # grass
                     else:
-                        block_type = 2   # grass
+                        block_type = 4  # sand
                 elif wz < 2:
-                    block_type = 3       # stone below
+                    block_type = 3  # always stone below sea level
                 else:
-                    # sub‐surface
-                    if biome == BIOME_DESERT:
-                        block_type = 4     # deeper sand
+                    if height >= 15:
+                        block_type = 3  # stone
+                    elif height >= 6:
+                        block_type = 1  # dirt
                     else:
-                        block_type = 1     # dirt
-
+                        block_type = 4  # more sand
                 self.blocks[(x, y, z)] = block_type
                 if self.world_blocks is not None:
                     self.world_blocks[(wx, wy, wz)] = block_type
@@ -202,37 +166,28 @@ class Chunk:
                 wy = chunk_y * CHUNK_SIZE + y
                 for z in reversed(range(CHUNK_SIZE)):
                     wz = chunk_z * CHUNK_SIZE + z
-                    height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
+                    height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
                     block_type = None
-                    # if wz > height:
-                    #     continue
-                    # elif wz == height:
-                    #     block_type = 2
-                    # elif wz < 2:
-                    #     block_type = 3
-                    # else:
-                    #     block_type = 1
-                    biome = get_biome(wx, wy)
                     if wz > height:
                         continue
                     elif wz == height:
-                        log.debug("get_biome @ (%d,%d) → %d", wx, wy, biome)
-                        # surface block varies by biome
-                        if biome == BIOME_DESERT:
-                            block_type = 4   # assign ID 4 → sand (you’ll add to BLOCK_TYPES)
-                        elif biome == BIOME_SNOW:
-                            block_type = 5   # snow block (ID 5)
+                        if height >= 20:
+                            block_type = 5  # snow
+                        elif height >= 15:
+                            block_type = 3  # stone
+                        elif height >= 6:
+                            block_type = 2  # grass
                         else:
-                            block_type = 2   # grass
+                            block_type = 4  # sand
                     elif wz < 2:
-                        block_type = 3       # stone below
+                        block_type = 3  # always stone below sea level
                     else:
-                        # sub‐surface
-                        if biome == BIOME_DESERT:
-                            block_type = 4     # deeper sand
+                        if height >= 15:
+                            block_type = 3  # stone
+                        elif height >= 6:
+                            block_type = 1  # dirt
                         else:
-                            block_type = 1     # dirt
-
+                            block_type = 4  # more sand
                     blocks[(x, y, z)] = block_type
         return blocks
 
@@ -326,13 +281,15 @@ class PlayerController:
         self.player_vel = Vec3(0, 0, 0)
         self.is_on_ground = False
         self.app.accept("space", self.try_jump)
+        self.no_clip = False
+        self.app.accept("f", self.toggle_clip)     # press F to toggle
         self.app.taskMgr.add(self.update_camera, "cameraTask")
 
         # background music
-        # self.music = self.app.loader.loadMusic("assets/song_Forest.mp3")
-        # self.music.setLoop(True)
-        # self.music.setVolume(0.8)  # adjust volume to taste
-        # self.music.play()
+        self.music = self.app.loader.loadMusic("assets/song_Forest.mp3")
+        self.music.setLoop(True)
+        self.music.setVolume(0.8)  # adjust volume to taste
+        self.music.play()
 
         # Load footstep sounds (IDs must match BLOCK_TYPES)
         self.footstep_sounds = {
@@ -345,12 +302,14 @@ class PlayerController:
         # Footstep timing
         self.step_timer = 0.0
         self.step_interval = 0.1  # seconds between step
+
+        self.render_distance = RENDER_DISTANCE
     
     def play_footstep(self):
         print("▶play_footstep called") 
         # find the block directly under the player
         x, y, _ = self.app.camera.getPos()
-        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
+        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
         print("play_footstep: player pos:", x, y, h)
         block_pos = (math.floor(x), math.floor(y), math.floor(h))
         print("play_footstep: block_pos:", block_pos)
@@ -367,6 +326,17 @@ class PlayerController:
             print("play_footstep: playing sound")
             sfx.setVolume(0.8)
             sfx.play()
+    
+    def toggle_clip(self):
+        self.no_clip = not self.no_clip
+        print("No-clip is now", self.no_clip)
+        # if you want to “pause” gravity entirely, reset velocity:
+        if self.no_clip:
+            self.player_vel = Vec3(0,0,0)
+            self.is_on_ground = False
+            self.render_distance = 8  # increase render distance in no-clip mode
+        else:
+            self.render_distance = RENDER_DISTANCE
 
     def set_key(self, key, value):
         self.key_map[key] = value
@@ -394,6 +364,7 @@ class PlayerController:
         cam = self.app.camera
         pos = cam.getPos()
         speed = 5.5
+        fly_speed = 10
         move = Vec3(0, 0, 0)
 
         heading_rad = math.radians(self.heading)
@@ -410,7 +381,27 @@ class PlayerController:
             move += right
         if move.length() > 0:
             move.normalize()
+            # Choose speed: flycam vs. normal
+            speed = fly_speed if self.no_clip else speed
             move *= speed * dt
+        
+        if self.app.mouseWatcherNode.hasMouse():
+            md = self.app.win.getPointer(0)
+            x = md.getX()
+            y = md.getY()
+            dx = x - self.center_x
+            dy = y - self.center_y
+            if dx != 0 or dy != 0:
+                self.heading -= dx * self.sens
+                self.pitch -= dy * self.sens
+                self.pitch = max(-89, min(89, self.pitch))
+                self.app.camera.setHpr(self.heading, self.pitch, 0)
+                self.app.win.movePointer(0, self.center_x, self.center_y)
+
+        if self.no_clip:
+            # simply move the camera with no gravity or collision
+            cam.setPos(pos + move)
+            return task.cont
 
         self.player_vel.z -= GRAVITY * dt
         if self.player_vel.z < -GRAVITY:
@@ -467,26 +458,12 @@ class PlayerController:
 
         if pos.z < -10:
             self.app.spawn_at_origin()
-
-        if self.app.mouseWatcherNode.hasMouse():
-            md = self.app.win.getPointer(0)
-            x = md.getX()
-            y = md.getY()
-            dx = x - self.center_x
-            dy = y - self.center_y
-            if dx != 0 or dy != 0:
-                self.heading -= dx * self.sens
-                self.pitch -= dy * self.sens
-                self.pitch = max(-89, min(89, self.pitch))
-                self.app.camera.setHpr(self.heading, self.pitch, 0)
-                self.app.win.movePointer(0, self.center_x, self.center_y)
         
         return task.cont
 
 class WorldManager:
     def __init__(self, app):
         self.app = app
-        self.render_distance = RENDER_DISTANCE
         self.chunk_size = CHUNK_SIZE
         self.chunk_load_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.chunks_to_finalize = Queue()
@@ -495,10 +472,11 @@ class WorldManager:
         self.world_blocks = {}  # keys: (wx, wy, wz)
         self.last_player_chunk = None
         # build the set of all (cx,cy,cz=0) around origin we want before spawning
+        rd = self.app.player_controller.render_distance
         keys = [
             (dx, dy, 0)
-            for dx in range(-RENDER_DISTANCE, RENDER_DISTANCE+1)
-            for dy in range(-RENDER_DISTANCE, RENDER_DISTANCE+1)
+            for dx in range(-rd, rd+1)
+            for dy in range(-rd, rd+1)
         ]
         keys.sort(key=lambda k: math.hypot(k[0], k[1]))
         self.initial_queue = keys
@@ -545,9 +523,10 @@ class WorldManager:
         player_cx, player_cy, player_cz = player_chunk
         chunks_to_keep = set()
 
-        for dx in range(-self.render_distance, self.render_distance+1):
-            for dy in range(-self.render_distance, self.render_distance+1):
-                for dz in range(-self.render_distance, self.render_distance+1):
+        rd = self.app.player_controller.render_distance
+        for dx in range(-rd, rd+1):
+            for dy in range(-rd, rd+1):
+                for dz in range(-rd, rd+1):
                     cx = player_cx + dx
                     cy = player_cy + dy
                     cz = player_cz + dz
@@ -1284,10 +1263,17 @@ class CubeCraft(ShowBase):
         return task.cont
 
     def update_chunk_building(self, task):
-        # Even while paused, build one plane of the next chunk each frame
-        if self.building_chunks:
+        # process more planes per frame if flycam
+        max_planes = MAX_FINALIZE_PER_FRAME
+        if self.player_controller.no_clip:
+            max_planes = 10   # or however many you can handle
+
+        planes = 0
+        while self.building_chunks and planes < max_planes:
             chunk = self.building_chunks[0]
             still_more = chunk.process_next_plane()
+            planes += 1
+
             if not still_more:
                 # initial mesh (no culling) now that all planes exist
                 log.debug("Chunk %d,%d,%d built (unculled mesh).", chunk.chunk_x, chunk.chunk_y, chunk.chunk_z)
@@ -1299,13 +1285,6 @@ class CubeCraft(ShowBase):
                 done = self.world_manager.initial_done + self.mesh_done
                 total = self.world_manager.initial_total * 2
                 self.ui_manager.update_loading(done, total)
-
-                # mark neighbors for cull-pass
-                # for dx, dy, dz in NEIGHBOR_OFFSETS:
-                #     neighbor_key = (chunk.chunk_x + dx,
-                #                     chunk.chunk_y + dy,
-                #                     chunk.chunk_z + dz)
-                #     self.world_manager.dirty_chunks.add(neighbor_key)
 
                 # now let process_dirty handle the force_cull pass over subsequent frames
                 self.world_manager.dirty_chunks.add((chunk.chunk_x,
@@ -1329,13 +1308,14 @@ class CubeCraft(ShowBase):
                 # find chunk & local coords
                 (cx, cy, cz), (lx, ly, lz) = self.block_interaction.get_chunk_and_local(pos)
                 chunk_key = (cx, cy, cz)
-                # Ensure chunk exists — if not, create a shell now
-                if chunk_key not in self.world_manager.chunks:
-                    new_chunk = Chunk(self, cx, cy, cz, self.tex_dict, self.world_manager.world_blocks)
-                    self.world_manager.chunks[chunk_key] = new_chunk
-                    self.building_chunks.append(new_chunk)
-                # Now patch the block in
-                chunk = self.world_manager.chunks[chunk_key]
+                # grab or create that chunk
+                chunk = self.world_manager.chunks.get(chunk_key)
+                if chunk is None:
+                    # no chunk there yet — make a brand new shell and schedule it to build
+                    chunk = Chunk(self, cx, cy, cz, self.tex_dict, self.world_manager.world_blocks)
+                    self.world_manager.chunks[chunk_key] = chunk
+                    self.building_chunks.append(chunk)
+                # NOW it's guaranteed to be a real Chunk
                 chunk.blocks[(lx, ly, lz)] = bt
                 self.world_manager.dirty_chunks.add(chunk_key)
                 # chunk = self.world_manager.chunks.get((cx, cy, cz))
@@ -1371,6 +1351,7 @@ class CubeCraft(ShowBase):
             # bind escape & F3
             self.accept("escape", self.handle_escape_key)
             self.accept("f3",     self.toggle_f3_features)
+            self.accept("f2",     self.player_controller.toggle_clip)
 
         return task.cont
 
@@ -1401,7 +1382,7 @@ class CubeCraft(ShowBase):
 
     def spawn_at_origin(self):
         x, y = 0, 0
-        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LUCANARITY)
+        h = get_terrain_height(x, y, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
         spawn_z = h + PLAYER_HEIGHT + 10
         self.camera.setPos(x, y, spawn_z)
         self.player_controller.player_vel = Vec3(0, 0, 0)
