@@ -70,7 +70,7 @@ FACES = [
     ((-1, 0, 0), "west",   [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)]),   # -X
     ((1, 0, 0),  "east",   [(1, 1, 0), (1, 1, 1), (1, 0, 1), (1, 0, 0)]),   # +X
     ((0, 0, 1),  "top",    [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]),   # +Z
-    ((0, 0, -1), "bottom", [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]),   # -Z
+    ((0, 0, -1), "bottom", [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)]),   # -Z
 ]
 FACE_UVS = [[(0, 0), (1, 0), (1, 1), (0, 1)] for _ in range(6)]
 
@@ -164,30 +164,23 @@ class Chunk:
             wx = chunk_x * CHUNK_SIZE + x
             for y in range(CHUNK_SIZE):
                 wy = chunk_y * CHUNK_SIZE + y
+                height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
                 for z in reversed(range(CHUNK_SIZE)):
                     wz = chunk_z * CHUNK_SIZE + z
-                    height = get_terrain_height(wx, wy, SCALE, OCTAVES, PERSISTENCE, LACUNARITY)
                     block_type = None
                     if wz > height:
                         continue
                     elif wz == height:
-                        if height >= 20:
-                            block_type = 5  # snow
-                        elif height >= 15:
-                            block_type = 3  # stone
-                        elif height >= 6:
-                            block_type = 2  # grass
-                        else:
-                            block_type = 4  # sand
+                        if height >= 20: block_type = 5
+                        elif height >= 15: block_type = 3
+                        elif height >= 6: block_type = 2
+                        else: block_type = 4
                     elif wz < 2:
-                        block_type = 3  # always stone below sea level
+                        block_type = 3
                     else:
-                        if height >= 15:
-                            block_type = 3  # stone
-                        elif height >= 6:
-                            block_type = 1  # dirt
-                        else:
-                            block_type = 4  # more sand
+                        if height >= 15: block_type = 3
+                        elif height >= 6: block_type = 1
+                        else: block_type = 4
                     blocks[(x, y, z)] = block_type
         return blocks
 
@@ -253,14 +246,14 @@ class Chunk:
                 np.setTexture(self.tex_dict[k])
 
     def destroy(self):
-        # if self.world_blocks is not None:
-        #     for pos in self.blocks:
-        #         x, y, z = pos
-        #         wx = self.chunk_x * CHUNK_SIZE + x
-        #         wy = self.chunk_y * CHUNK_SIZE + y
-        #         wz = self.chunk_z * CHUNK_SIZE + z
-        #         if (wx, wy, wz) in self.world_blocks:
-        #             del self.world_blocks[(wx, wy, wz)]
+        if self.world_blocks is not None:
+            for pos in self.blocks:
+                x, y, z = pos
+                wx = self.chunk_x * CHUNK_SIZE + x
+                wy = self.chunk_y * CHUNK_SIZE + y
+                wz = self.chunk_z * CHUNK_SIZE + z
+                if (wx, wy, wz) in self.world_blocks:
+                    del self.world_blocks[(wx, wy, wz)]
         self.node.removeNode()
         self.blocks.clear()
 
@@ -320,12 +313,9 @@ class PlayerController:
         if not sfx:
             return
         
-        # only start it if it’s not already playing
-        if sfx.status() != AudioSound.PLAYING:
-            print("sfx.status() != AudioSound.PLAYING:", sfx.status() != AudioSound.PLAYING)
-            print("play_footstep: playing sound")
-            sfx.setVolume(0.8)
-            sfx.play()
+        sound_instance = self.app.loader.loadSfx(sfx.getName())
+        sound_instance.setVolume(0.8)
+        sound_instance.play()
     
     def toggle_clip(self):
         self.no_clip = not self.no_clip
@@ -427,9 +417,6 @@ class PlayerController:
                 pos.z = math.floor(pos.z + 0.01)
             elif self.player_vel.z > 0:
                 self.player_vel.z = 0
-        
-        if abs(pos.z - round(pos.z)) < 0.05:
-            self.is_on_ground = True
         
         moved = move.length() > 0 and not blocked_xy
         on_ground = self.is_on_ground
@@ -1106,7 +1093,6 @@ class BlockInteraction:
 
         log.info(f"Mined {block_type} at {block_coord}")
 
-
     def place_block(self):
         # 1) Pick from hotbar
         block_type = self.app.hotbar.get_selected_blocktype()
@@ -1441,16 +1427,19 @@ class CubeCraft(ShowBase):
 
         # reposition sun/​moon on a circle overhead
         R = 1000  # radius of your sky sphere
+        cam_pos = self.camera.getPos()
         # Let's put them on the X–Z plane:  
         sun_x = R * math.cos(phase)
         sun_z = R * sun_elevation
-        self.sun_np.setPos(sun_x, 0, sun_z)
+        # Add camera position to keep it relative to the player
+        self.sun_np.setPos(cam_pos.x + sun_x, cam_pos.y, sun_z)
 
         moon_phase = phase + math.pi  # opposite side
         moon_elev = math.sin(moon_phase)
         moon_x = R * math.cos(moon_phase)
         moon_z = R * moon_elev
-        self.moon_np.setPos(moon_x, 0, moon_z)
+        # Add camera position to keep it relative to the player
+        self.moon_np.setPos(cam_pos.x + moon_x, cam_pos.y, moon_z)
 
         # show/hide depending on whether they're above the horizon
         if sun_elevation > 0:

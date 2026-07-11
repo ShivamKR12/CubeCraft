@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE specific
+.idea/
+.vscode/
+
+# Build artifacts
+build/
+dist/
+
+# Game specific
+world.dat

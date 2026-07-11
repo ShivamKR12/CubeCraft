@@ -1,1 +1,3 @@
-panad3d
+panad3d==1.10.15
+noise
+concurrent
